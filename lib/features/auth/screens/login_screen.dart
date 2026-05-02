@@ -20,6 +20,56 @@ class _LoginScreenState extends State<LoginScreen> {
   final String adminEmail = "admin@gmail.com";
   final String adminPass = "admin123456";
 
+
+  Future<void> _handleGoogleLogin() async {
+    // Thông báo như bản cũ vì cần cấu hình SHA-1
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text("Thông báo"),
+        content: const Text("Tính năng Google Login yêu cầu cấu hình SHA-1 trên Firebase. Hãy sử dụng Email/Mật khẩu để demo."),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Đóng"))
+        ],
+      ),
+    );
+
+    /* Logic thật sau khi Hội cài google_sign_in:
+  final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+  final GoogleSignInAuthentication? googleAuth = await googleUser?.authentication;
+  final credential = GoogleAuthProvider.credential(
+    accessToken: googleAuth?.accessToken,
+    idToken: googleAuth?.idToken,
+  );
+  await FirebaseAuth.instance.signInWithCredential(credential);
+  */
+  }
+
+// Trong phương thức build, thêm Divider và nút Google dưới nút ĐĂNG NHẬP:
+/*
+const SizedBox(height: 20),
+const Row(
+  children: [
+    Expanded(child: Divider()),
+    Padding(padding: EdgeInsets.symmetric(horizontal: 10), child: Text("Hoặc", style: TextStyle(color: Colors.grey))),
+    Expanded(child: Divider()),
+  ],
+),
+const SizedBox(height: 20),
+SizedBox(
+  width: double.infinity,
+  height: 55,
+  child: OutlinedButton.icon(
+    onPressed: _handleGoogleLogin,
+    icon: const Icon(Icons.g_mobiledata, size: 30, color: Colors.red),
+    label: const Text("ĐĂNG NHẬP BẰNG GOOGLE", style: TextStyle(color: Colors.black54)),
+    style: OutlinedButton.styleFrom(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+  ),
+),
+*/
+
   Future<void> _handleLogin() async {
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
@@ -198,3 +248,4 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 }
+

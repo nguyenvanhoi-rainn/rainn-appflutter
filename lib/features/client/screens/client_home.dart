@@ -22,48 +22,12 @@ class ClientHomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: CustomScrollView(
-        slivers: [
-          // AppBar với hiệu ứng Parallax
-          SliverAppBar(
-            expandedHeight: 180.0,
-            floating: false,
-            pinned: true,
-            flexibleSpace: FlexibleSpaceBar(
-              title: const Text(
-                'RAINN SERVICES',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              centerTitle: true,
-              background: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset(
-                    'assets/images/banner_home.png',
-                    fit: BoxFit.cover,
-                  ),
-                  // Lớp phủ tối để làm nổi bật tiêu đề
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Colors.black26, Colors.black54],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Phần nội dung chính
-          SliverToBoxAdapter(
-            child: Padding(
+      backgroundColor: Colors.white,
+      body: SingleChildScrollView( // Dùng SingleChildScrollView thay cho CustomScrollView để dễ tùy biến Header
+        child: Column(
+          children: [
+            _buildModernHeader(context),
+            Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 24.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -86,6 +50,75 @@ class ClientHomeScreen extends StatelessWidget {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Header mới không dùng ảnh, dùng Gradient và bo góc cực đẹp
+  Widget _buildModernHeader(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 60, left: 25, right: 25, bottom: 40),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF1BA39C), Color(0xFF2C3E50)],
+        ),
+        borderRadius: BorderRadius.only(
+          bottomLeft: Radius.circular(40),
+          bottomRight: Radius.circular(40),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "Xin chào Hội!",
+                    style: TextStyle(color: Colors.white70, fontSize: 16),
+                  ),
+                  SizedBox(height: 5),
+                  Text(
+                    "RAINN SERVICES",
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ],
+              ),
+              CircleAvatar(
+                backgroundColor: Colors.white.withOpacity(0.2),
+                child: const Icon(Icons.person, color: Colors.white),
+              )
+            ],
+          ),
+          const SizedBox(height: 30),
+          // Thanh tìm kiếm giả (Dễ dùng cho người dùng)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 15),
+            height: 50,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(15),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.search, color: Colors.grey),
+                SizedBox(width: 10),
+                Text("Tìm kiếm dịch vụ sửa chữa...", style: TextStyle(color: Colors.grey)),
+              ],
+            ),
           ),
         ],
       ),
@@ -106,10 +139,14 @@ class ClientHomeScreen extends StatelessWidget {
         }).toList();
 
         if (categories.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.only(top: 50),
-              child: Text('Hiện chưa có dịch vụ nào khả dụng.'),
+          return Center(
+            child: Column(
+              children: [
+                const SizedBox(height: 40),
+                Icon(Icons.info_outline, size: 50, color: Colors.grey[300]),
+                const SizedBox(height: 10),
+                const Text('Hiện chưa có dịch vụ nào khả dụng.', style: TextStyle(color: Colors.grey)),
+              ],
             ),
           );
         }
@@ -159,7 +196,7 @@ class ClientHomeScreen extends StatelessWidget {
                   Text(
                     category.name,
                     style: const TextStyle(
-                      fontSize: 14,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                       color: Color(0xFF34495E),
                     ),

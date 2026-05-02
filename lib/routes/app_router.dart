@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 // --- AUTH ---
+import '../features/admin/screens/admin_jobs_management.dart';
+import '../features/admin/screens/admin_services_management.dart';
+import '../features/admin/screens/admin_users.dart';
+import '../features/admin/screens/settings.dart';
 import '../features/auth/screens/login_screen.dart';
 import '../features/auth/screens/register_screen.dart';
 
@@ -124,12 +128,29 @@ class AppRouter {
             builder: (context, state) => const VerifyWorkersScreen(),
           ),
           GoRoute(
-            path: 'services',
+            path: 'categories', // Quản lý danh mục cha
             builder: (context, state) => const AdminCategoriesScreen(),
+          ),
+          GoRoute(
+            path: 'services', // Quản lý dịch vụ con (nếu Hội tách riêng file)
+            builder: (context, state) => const ManageServices(), // Tham chiếu source 6
           ),
           GoRoute(
             path: 'analytics',
             builder: (context, state) => const AdminAnalyticsScreen(),
+          ),
+          // BỔ SUNG CÁC ROUTE DƯỚI ĐÂY:
+          GoRoute(
+            path: 'users', // Quản lý tài khoản Client/Worker
+            builder: (context, state) => const ManageUsers(), // Tham chiếu source 8
+          ),
+          GoRoute(
+            path: 'jobs', // Quản lý các bài đăng việc làm thực tế
+            builder: (context, state) => const AdminJobsManagement(), // Tham chiếu source 13
+          ),
+          GoRoute(
+            path: 'settings', // Cấu hình hotline, bảo trì hệ thống
+            builder: (context, state) => const AdminSettingsScreen(), // Tham chiếu source 7
           ),
         ],
       ),

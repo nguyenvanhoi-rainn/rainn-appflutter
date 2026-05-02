@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "350266614683",
+    "project_id": "rainn-app-v2",
+    "storage_bucket": "rainn-app-v2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:350266614683:android:a4095e85fa548373c7f73e",
+        "android_client_info": {
+          "package_name": "com.example.rainn_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyATOIOTahtsvDJxTqBe5NUaq-J9Hj1-Ghs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
