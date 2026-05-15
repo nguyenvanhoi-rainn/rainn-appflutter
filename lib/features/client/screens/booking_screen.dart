@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
-import '../../../data/models/booking_model.dart';
-import '../../../data/models/category_model.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart'; //
+import 'package:intl/intl.dart';
 
 class BookingScreen extends StatefulWidget {
   final String serviceId;
@@ -14,41 +14,88 @@ class BookingScreen extends StatefulWidget {
 }
 
 class _BookingScreenState extends State<BookingScreen> {
-  final _addressController = TextEditingController();
+  // --- Controllers & Form State ---
   final _descController = TextEditingController();
-  final _dateController = TextEditingController(text: DateTime.now().toString().split(' ')[0]);
+  final _priceController = TextEditingController();
 
-  CategoryModel? _category;
-  bool _isLoading = true;
+  String _selectedSubService = "";
+  DateTime _selectedDate = DateTime.now();
+  TimeOfDay _selectedTime = TimeOfDay.now();
+  bool _isNegotiable = false;
+  LatLng? _selectedLocation;
+
+  List<String> _subServices = [];
+  String _categoryName = "Dịch vụ";
+  bool _isLoadingData = true;
   bool _isSubmitting = false;
 
   @override
   void initState() {
     super.initState();
-    _loadServiceDetail();
+    _loadData();
   }
 
-  // Lấy thông tin dịch vụ từ ID để hiển thị tên và giá chuẩn
-  Future<void> _loadServiceDetail() async {
+  // 1. Tải dữ liệu Danh mục và Dịch vụ con giống code React
+  Future<void> _loadData() async {
     try {
-      final doc = await FirebaseFirestore.instance
-          .collection('categories')
-          .doc(widget.serviceId)
+      // Lấy tên danh mục
+      final catDoc = await FirebaseFirestore.instance.collection('categories').doc(widget.serviceId).get();
+
+      // Lấy danh sách dịch vụ con (sub-services)
+      final serviceQuery = await FirebaseFirestore.instance
+          .collection('services')
+          .where('categoryId', isEqualTo: widget.serviceId)
           .get();
-      if (doc.exists && mounted) {
+
+      if (mounted) {
         setState(() {
-          _category = CategoryModel.fromFirestore(doc);
-          _isLoading = false;
+          _categoryName = catDoc.data()?['name'] ?? "Dịch vụ";
+          _subServices = serviceQuery.docs.map((doc) => doc.data()['name'] as String).toList();
+          _isLoadingData = false;
         });
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoadingData = false);
     }
   }
 
-  Future<void> _createBooking() async {
-    if (_addressController.text.trim().isEmpty) {
-      _showSnackBar("Vui lòng nhập địa chỉ thực hiện");
+  // 2. Hàm ghim vị trí trên Map
+  void _openMapPicker() async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => SizedBox(
+        height: MediaQuery.of(context).size.height * 0.8,
+        child: Column(
+          children: [
+            AppBar(
+              title: const Text("Ghim vị trí công việc", style: TextStyle(fontSize: 16)),
+              leading: IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context)),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("XONG", style: TextStyle(color: Color(0xFF1BA39C), fontWeight: FontWeight.bold)),
+                )
+              ],
+            ),
+            Expanded(
+              child: GoogleMapsPicker(
+                initialLocation: _selectedLocation ?? const LatLng(10.9805, 106.6745), // Tọa độ Bình Dương
+                onLocationSelected: (location) {
+                  setState(() => _selectedLocation = location);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 3. Hàm gửi yêu cầu (Booking)
+  Future<void> _handleConfirm() async {
+    if (_selectedSubService.isEmpty || _selectedLocation == null || (!_isNegotiable && _priceController.text.isEmpty)) {
+      _showSnackBar("Vui lòng nhập đầy đủ thông tin (*)");
       return;
     }
 
@@ -56,145 +103,220 @@ class _BookingScreenState extends State<BookingScreen> {
     final user = FirebaseAuth.instance.currentUser;
 
     try {
-      // ĐỒNG BỘ: Sử dụng BookingModel để đóng gói dữ liệu
-      final newBooking = BookingModel(
-        id: '', // Firestore tự sinh ID
-        clientId: user?.uid ?? '',
-        clientName: user?.displayName ?? 'Khách hàng',
-        serviceName: _category?.name ?? 'Dịch vụ lạ',
-        address: _addressController.text.trim(),
-        description: _descController.text.trim(),
-        price: 200000, // Bạn có thể thêm trường giá vào CategoryModel nếu muốn
-        date: _dateController.text,
-        status: 'pending',
-        paymentStatus: 'unpaid',
-      );
+      final formattedTime = "${_selectedTime.hour}:${_selectedTime.minute.toString().padLeft(2, '0')}";
 
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .add(newBooking.toFirestore());
+      await FirebaseFirestore.instance.collection('jobs').add({
+        'clientId': user?.uid,
+        'clientName': user?.displayName ?? "Khách hàng",
+        'groupService': _categoryName,
+        'subService': _selectedSubService,
+        'description': _descController.text.trim(),
+        'workDate': DateFormat('yyyy-MM-dd').format(_selectedDate),
+        'workTime': formattedTime,
+        'location': {
+          'latitude': _selectedLocation!.latitude,
+          'longitude': _selectedLocation!.longitude,
+        },
+        'address': "Tọa độ: ${_selectedLocation!.latitude.toStringAsFixed(4)}, ${_selectedLocation!.longitude.toStringAsFixed(4)}",
+        'price': _isNegotiable ? "Thương lượng" : _priceController.text.replaceAll(',', ''),
+        'status': "pending",
+        'createdAt': FieldValue.serverTimestamp(),
+      });
 
       if (mounted) {
-        _showSnackBar("Đặt dịch vụ thành công!");
+        _showSnackBar("Gửi yêu cầu thành công!");
         context.go('/');
       }
     } catch (e) {
-      _showSnackBar("Lỗi khi đặt lịch: $e");
+      _showSnackBar("Lỗi: Không thể gửi yêu cầu.");
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  void _showSnackBar(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+    if (_isLoadingData) return const Scaffold(body: Center(child: CircularProgressIndicator()));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text("Đặt ${_category?.name ?? 'Dịch vụ'}"),
-        backgroundColor: const Color(0xFF1BA39C),
-        foregroundColor: Colors.white,
+        title: Text(_categoryName, style: const TextStyle(fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        foregroundColor: Colors.black,
+        elevation: 0,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(25.0),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header hiển thị loại dịch vụ
-            Center(
-              child: Column(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1BA39C).withOpacity(0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(Icons.build_circle, size: 50, color: Color(0xFF1BA39C)),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    _category?.name ?? 'Thông tin dịch vụ',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
+            // Section 1: Dịch vụ chi tiết (Chips)
+            const Text("1. Dịch vụ chi tiết *", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              children: _subServices.map((s) => ChoiceChip(
+                label: Text(s),
+                selected: _selectedSubService == s,
+                onSelected: (val) => setState(() => _selectedSubService = s),
+                selectedColor: const Color(0xFF1BA39C),
+                labelStyle: TextStyle(color: _selectedSubService == s ? Colors.white : Colors.black),
+              )).toList(),
             ),
-            const SizedBox(height: 30),
 
-            const Text("Thông tin đặt lịch", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 15),
-
-            TextField(
-              controller: _addressController,
-              decoration: InputDecoration(
-                labelText: "Địa chỉ thực hiện *",
-                prefixIcon: const Icon(Icons.location_on_outlined),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-            ),
+            // Section 2: Ngày & Giờ
             const SizedBox(height: 20),
-
-            TextField(
-              controller: _dateController,
-              readOnly: true,
+            const Text("2. Chọn ngày & giờ *", style: TextStyle(fontWeight: FontWeight.bold)),
+            CalendarDatePicker(
+              initialDate: _selectedDate,
+              firstDate: DateTime.now(),
+              lastDate: DateTime(2027),
+              onDateChanged: (date) => setState(() => _selectedDate = date),
+            ),
+            ListTile(
+              tileColor: const Color(0xFFF0F9F8),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              leading: const Icon(Icons.access_time, color: Color(0xFF1BA39C)),
+              title: Text("Giờ hẹn: ${_selectedTime.format(context)}"),
               onTap: () async {
-                DateTime? pickedDate = await showDatePicker(
-                  context: context,
-                  initialDate: DateTime.now(),
-                  firstDate: DateTime.now(),
-                  lastDate: DateTime(2027),
-                );
-                if (pickedDate != null) {
-                  setState(() => _dateController.text = pickedDate.toString().split(' ')[0]);
-                }
+                final time = await showTimePicker(context: context, initialTime: _selectedTime);
+                if (time != null) setState(() => _selectedTime = time);
               },
-              decoration: InputDecoration(
-                labelText: "Ngày thực hiện",
-                prefixIcon: const Icon(Icons.calendar_today_outlined),
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+
+            // Section 3: Giá tiền
+            const SizedBox(height: 25),
+            const Text("3. Giá tiền mong muốn (VNĐ) *", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _priceController,
+                    enabled: !_isNegotiable,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      hintText: "Ví dụ: 200,000",
+                      filled: true,
+                      fillColor: _isNegotiable ? Colors.grey[200] : const Color(0xFFF9FAFB),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: _isNegotiable ? const Color(0xFF1BA39C) : Colors.transparent,
+                    side: const BorderSide(color: Color(0xFF1BA39C)),
+                    padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+                  ),
+                  onPressed: () => setState(() => _isNegotiable = !_isNegotiable),
+                  child: Text("Thương lượng", style: TextStyle(color: _isNegotiable ? Colors.white : const Color(0xFF1BA39C))),
+                ),
+              ],
+            ),
+
+            // Section 4: Vị trí
+            const SizedBox(height: 25),
+            const Text("4. Vị trí nơi làm việc *", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            InkWell(
+              onTap: _openMapPicker,
+              child: Container(
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: _selectedLocation != null ? const Color(0xFFF0F9F8) : const Color(0xFFF9FAFB),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: _selectedLocation != null ? const Color(0xFF1BA39C) : Colors.grey[300]!),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.location_searching, color: _selectedLocation != null ? const Color(0xFF1BA39C) : Colors.grey),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        _selectedLocation != null
+                            ? "Đã ghim: ${_selectedLocation!.latitude.toStringAsFixed(4)}, ${_selectedLocation!.longitude.toStringAsFixed(4)}"
+                            : "Nhấn để chọn vị trí trên bản đồ...",
+                        style: TextStyle(color: _selectedLocation != null ? const Color(0xFF1BA39C) : Colors.grey),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 20),
 
+            // Section 5: Mô tả
+            const SizedBox(height: 25),
+            const Text("5. Mô tả chi tiết công việc", style: TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
             TextField(
               controller: _descController,
-              maxLines: 3,
+              maxLines: 4,
               decoration: InputDecoration(
-                labelText: "Ghi chú cho thợ (không bắt buộc)",
-                hintText: "Ví dụ: Máy lạnh hiệu Daikin, bị chảy nước...",
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                hintText: "Ghi chú thêm cho thợ...",
+                filled: true,
+                fillColor: const Color(0xFFF9FAFB),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
               ),
             ),
 
-            const SizedBox(height: 40),
-
+            // Nút xác nhận
+            const SizedBox(height: 30),
             SizedBox(
               width: double.infinity,
               height: 55,
               child: ElevatedButton(
-                onPressed: _isSubmitting ? null : _createBooking,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF1BA39C),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
+                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1BA39C), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15))),
+                onPressed: _isSubmitting ? null : _handleConfirm,
                 child: _isSubmitting
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text(
-                    "XÁC NHẬN ĐẶT LỊCH",
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)
-                ),
+                    : const Text("XÁC NHẬN ĐẶT LỊCH", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
               ),
             ),
+            const SizedBox(height: 40),
           ],
         ),
       ),
+    );
+  }
+}
+
+// Widget hỗ trợ chọn vị trí trên Google Maps
+class GoogleMapsPicker extends StatefulWidget {
+  final LatLng initialLocation;
+  final Function(LatLng) onLocationSelected;
+
+  const GoogleMapsPicker({super.key, required this.initialLocation, required this.onLocationSelected});
+
+  @override
+  State<GoogleMapsPicker> createState() => _GoogleMapsPickerState();
+}
+
+class _GoogleMapsPickerState extends State<GoogleMapsPicker> {
+  late LatLng _currentPos;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPos = widget.initialLocation;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GoogleMap(
+      initialCameraPosition: CameraPosition(target: _currentPos, zoom: 15),
+      onTap: (pos) {
+        setState(() => _currentPos = pos);
+        widget.onLocationSelected(pos);
+      },
+      markers: {
+        Marker(markerId: const MarkerId("selected"), position: _currentPos),
+      },
     );
   }
 }

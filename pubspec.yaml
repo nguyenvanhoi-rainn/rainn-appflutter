@@ -44,6 +44,10 @@ dependencies:
   google_maps_flutter: ^2.17.0
   mapbox_maps_flutter: ^2.23.0
   ionicons: ^0.2.2
+  url_launcher: ^6.3.2
+  image_picker: ^1.2.2
+  intl: ^0.20.2
+  firebase_storage: ^13.4.1
 
 dev_dependencies:
   flutter_test:

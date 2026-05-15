@@ -54,9 +54,10 @@ class AppRouter {
         builder: (context, state) => const MainWrapper(),
         routes: [
           GoRoute(
-            path: 'chat/:chatId',
-            builder: (context, state) => ChatDetailScreen(
-              chatId: state.pathParameters['chatId']!,
+            path: 'chat/:workerId/:workerName', // Nhận cả ID và Tên để hiện header
+            builder: (context, state) => ClientChatDetailScreen(
+              workerId: state.pathParameters['workerId']!,
+              workerName: state.pathParameters['workerName']!,
             ),
           ),
           GoRoute(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
+import 'package:intl/intl.dart';
 
 class JobDetailScreen extends StatefulWidget {
   final String jobId;
@@ -14,30 +15,88 @@ class JobDetailScreen extends StatefulWidget {
 class _JobDetailScreenState extends State<JobDetailScreen> {
   bool _isProcessing = false;
 
-  // Hàm cập nhật trạng thái công việc
-  Future<void> _updateJobStatus(String status) async {
+  // Định dạng tiền tệ VNĐ
+  String _formatPrice(dynamic p) {
+    if (p == null || p == "Thương lượng") return "Thỏa thuận";
+    final formatter = NumberFormat("#,###", "vi_VN");
+    try {
+      return "${formatter.format(int.parse(p.toString().replaceAll(',', '')))} VNĐ";
+    } catch (e) {
+      return "$p VNĐ";
+    }
+  }
+
+  // ✅ HÀM NHẬN VIỆC & TỰ ĐỘNG GỬI VỊ TRÍ + GIÁ (NẾU CÓ)
+  Future<void> _handleAcceptJob(Map<String, dynamic> job) async {
+    final bool? confirm = await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Xác nhận'),
+        content: const Text('Bạn đồng ý nhận công việc này và bắt đầu trao đổi với khách?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Đồng ý')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     setState(() => _isProcessing = true);
-    final String uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String currentUserName = FirebaseAuth.instance.currentUser?.displayName ?? 'Người làm';
 
     try {
-      Map<String, dynamic> updateData = {'status': status};
+      // 1. Cập nhật trạng thái Job
+      final jobRef = FirebaseFirestore.instance.collection('jobs').doc(widget.jobId);
+      await jobRef.update({
+        'status': 'accepted',
+        'workerId': currentUserId,
+        'workerName': currentUserName,
+        'acceptedAt': FieldValue.serverTimestamp(),
+      });
 
-      if (status == 'accepted') {
-        updateData['workerId'] = uid;
-        updateData['acceptedAt'] = FieldValue.serverTimestamp();
-      } else if (status == 'completed') {
-        updateData['completedAt'] = FieldValue.serverTimestamp();
+      // 2. Tạo Chat ID
+      final String clientId = job['clientId'];
+      final String chatId = currentUserId.hashCode <= clientId.hashCode
+          ? '${currentUserId}_$clientId'
+          : '${clientId}_$currentUserId';
+
+      // 3. Tạo Metadata phòng chat
+      await FirebaseFirestore.instance.collection('chats').doc(chatId).set({
+        'lastMessage': '📍 Hệ thống đã cập nhật thông tin công việc',
+        'updatedAt': FieldValue.serverTimestamp(),
+        'users': [currentUserId, clientId],
+        'jobTitle': job['subService'],
+        'name_$clientId': job['clientName'] ?? 'Khách hàng',
+        'name_$currentUserId': currentUserName,
+      }, SetOptions(merge: true));
+
+      // 4. Gửi tin nhắn vị trí (Nếu khách có ghim tọa độ)
+      if (job['location'] != null) {
+        await FirebaseFirestore.instance.collection('chats/$chatId/messages').add({
+          'text': '📍 Vị trí công việc',
+          'senderId': clientId,
+          'createdAt': FieldValue.serverTimestamp(),
+          'type': 'location',
+          'latitude': job['location']['latitude'],
+          'longitude': job['location']['longitude'],
+        });
       }
 
-      await FirebaseFirestore.instance
-          .collection('bookings')
-          .doc(widget.jobId)
-          .update(updateData);
+      // 5. Gửi tin nhắn báo giá nếu không phải thương lượng
+      if (job['price'] != null && job['price'] != "Thương lượng") {
+        await FirebaseFirestore.instance.collection('chats/$chatId/messages').add({
+          'text': '💰 Giá dự kiến cho dịch vụ này là: ${_formatPrice(job['price'])}',
+          'senderId': clientId, // Gửi từ phía hệ thống/khách để thợ xác nhận
+          'createdAt': FieldValue.serverTimestamp(),
+          'type': 'text',
+        });
+      }
 
       if (mounted) {
-        String msg = status == 'accepted' ? 'Đã nhận việc thành công!' : 'Chúc mừng bạn đã hoàn thành!';
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-        context.pop();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã nhận việc thành công!')));
+        context.push('/worker/chat/$chatId');
       }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi: $e')));
@@ -49,76 +108,157 @@ class _JobDetailScreenState extends State<JobDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Chi tiết công việc')),
+      backgroundColor: const Color(0xFFF8F9FA),
+      appBar: AppBar(
+        title: const Text('Chi tiết công việc', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          onPressed: () => context.pop(),
+        ),
+      ),
       body: FutureBuilder<DocumentSnapshot>(
-        future: FirebaseFirestore.instance.collection('bookings').doc(widget.jobId).get(),
+        future: FirebaseFirestore.instance.collection('jobs').doc(widget.jobId).get(),
         builder: (context, snapshot) {
-          if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
+          if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+          if (!snapshot.hasData || !snapshot.data!.exists) return const Center(child: Text("Không tìm thấy công việc"));
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
           final String status = data['status'] ?? 'pending';
 
-          return Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildHeader(data['serviceName'] ?? 'Dịch vụ'),
-                const SizedBox(height: 20),
-                _buildInfoSection('Thông tin khách hàng', [
-                  'Tên: ${data['clientName']}',
-                  'Địa chỉ: ${data['address']}',
-                ]),
-                const Divider(height: 40),
-                _buildInfoSection('Mô tả công việc', [
-                  data['description'] ?? 'Không có mô tả chi tiết.',
-                ]),
-                const Spacer(),
-                _buildActionButton(status),
-              ],
-            ),
+          return Column(
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildMainCard(data),
+                      const SizedBox(height: 20),
+                      _buildWarningBox(),
+                    ],
+                  ),
+                ),
+              ),
+              _buildFooter(status, data),
+            ],
           );
         },
       ),
     );
   }
 
-  Widget _buildHeader(String title) {
-    return Text(
-      title,
-      style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Color(0xFF1BA39C)),
-    );
-  }
-
-  Widget _buildInfoSection(String title, List<String> lines) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey)),
-        const SizedBox(height: 8),
-        ...lines.map((line) => Text(line, style: const TextStyle(fontSize: 16, height: 1.5))),
-      ],
-    );
-  }
-
-  Widget _buildActionButton(String status) {
-    if (status == 'completed') return const SizedBox.shrink();
-
-    String btnText = status == 'pending' ? 'NHẬN CÔNG VIỆC' : 'HOÀN THÀNH CÔNG VIỆC';
-    Color btnColor = status == 'pending' ? const Color(0xFF1BA39C) : Colors.orange;
-
-    return SizedBox(
+  Widget _buildMainCard(Map<String, dynamic> data) {
+    return Container(
       width: double.infinity,
-      height: 55,
-      child: ElevatedButton(
-        onPressed: _isProcessing ? null : () => _updateJobStatus(status == 'pending' ? 'accepted' : 'completed'),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: btnColor,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        child: _isProcessing
-            ? const CircularProgressIndicator(color: Colors.white)
-            : Text(btnText, style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10)],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(data['groupService']?.toUpperCase() ?? 'DỊCH VỤ',
+                  style: const TextStyle(color: Color(0xFF1BA39C), fontWeight: FontWeight.bold, fontSize: 12)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(color: const Color(0xFFE0F2F1), borderRadius: BorderRadius.circular(8)),
+                child: Text(_formatPrice(data['price']), style: const TextStyle(color: Color(0xFF1BA39C), fontWeight: FontWeight.bold)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(data['subService'] ?? 'Dịch vụ', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+          Text('Khách hàng: ${data['clientName'] ?? "Ẩn danh"}', style: const TextStyle(color: Colors.grey)),
+          const Divider(height: 30),
+          _buildIconInfo(Icons.calendar_today, 'Ngày: ${data['workDate']}'),
+          _buildIconInfo(Icons.access_time, 'Giờ: ${data['workTime']}'),
+          _buildIconInfo(Icons.location_on, 'Địa chỉ: ${data['address']}', iconColor: Colors.redAccent),
+          const SizedBox(height: 20),
+          const Text("MÔ TẢ CHI TIẾT", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(15),
+            decoration: BoxDecoration(color: const Color(0xFFF8F9FA), borderRadius: BorderRadius.circular(12)),
+            child: Text(data['description'] ?? 'Không có mô tả chi tiết.', style: const TextStyle(height: 1.5)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIconInfo(IconData icon, String text, {Color iconColor = const Color(0xFF1BA39C)}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: iconColor),
+          const SizedBox(width: 12),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 16))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWarningBox() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: const Color(0xFFFEF9E7), borderRadius: BorderRadius.circular(15), border: Border.all(color: const Color(0xFFFCF3CF))),
+      child: const Row(
+        children: [
+          Icon(Icons.shield_outlined, color: Color(0xFF9A7D0A)),
+          SizedBox(width: 12),
+          Expanded(child: Text("Mọi giao dịch nên được thực hiện qua ứng dụng để đảm bảo quyền lợi.", style: TextStyle(color: Color(0xFF9A7D0A), fontSize: 13))),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFooter(String status, Map<String, dynamic> jobData) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: Colors.white,
+      child: Row(
+        children: [
+          OutlinedButton(
+            onPressed: () {
+              final String clientId = jobData['clientId'];
+              final String chatId = FirebaseAuth.instance.currentUser!.uid.hashCode <= clientId.hashCode
+                  ? '${FirebaseAuth.instance.currentUser!.uid}_$clientId'
+                  : '${clientId}_${FirebaseAuth.instance.currentUser!.uid}';
+              context.push('/worker/chat/$chatId');
+            },
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
+              side: const BorderSide(color: Color(0xFF1BA39C)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            ),
+            child: const Icon(Icons.chat_bubble_outline, color: Color(0xFF1BA39C)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: ElevatedButton(
+              onPressed: (_isProcessing || status == 'completed') ? null : () => _handleAcceptJob(jobData),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1BA39C),
+                padding: const EdgeInsets.symmetric(vertical: 18),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+              child: _isProcessing
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : Text(status == 'pending' ? 'NHẬN VIỆC' : 'ĐANG THỰC HIỆN',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+          ),
+        ],
       ),
     );
   }
