@@ -4,13 +4,13 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:intl/intl.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'dart:io';
 
 class WorkerChatDetailScreen extends StatefulWidget {
-  final String chatId; // ID phòng chat (WorkerID_ClientID)
+  final String chatId; // Router truyền vào đây thực chất là clientId (mã ID Khách)
   const WorkerChatDetailScreen({super.key, required this.chatId});
 
   @override
@@ -23,47 +23,50 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
   final _scrollController = ScrollController();
   final String currentUserId = FirebaseAuth.instance.currentUser?.uid ?? '';
 
+  String actualChatId = ''; // Biến lưu chuỗi ID phòng chat thực tế (workerId_clientId)
   Map<String, dynamic>? jobData;
   Map<String, dynamic>? clientData;
+  bool _isUploadingImage = false; // Trạng thái hiển thị vòng tải khi up ảnh
 
   @override
   void initState() {
     super.initState();
-    _loadChatMetadata();
+    _setupChatAndLoadMetadata();
   }
 
-  // Tải thông tin Job và Khách hàng liên quan đến cuộc hội thoại này
-  void _loadChatMetadata() async {
-    // 1. Lấy thông tin phòng chat để biết ai là khách
-    final chatDoc = await FirebaseFirestore.instance.collection('chats').doc(widget.chatId).get();
-    if (chatDoc.exists) {
-      final List users = chatDoc.data()?['users'] ?? [];
-      final String clientId = users.firstWhere((id) => id != currentUserId, orElse: () => '');
+  void _setupChatAndLoadMetadata() {
+    final String clientId = widget.chatId; // Định danh rõ ràng tham số nhận từ router
 
-      if (clientId.isNotEmpty) {
-        // 2. Lắng nghe thông tin khách hàng
-        FirebaseFirestore.instance.collection('users').doc(clientId).snapshots().listen((snap) {
-          if (mounted) setState(() => clientData = snap.data());
-        });
+    // Dựng ID phòng chat cố định chung giữa 2 user
+    setState(() {
+      actualChatId = currentUserId.hashCode <= clientId.hashCode
+          ? '${currentUserId}_$clientId'
+          : '${clientId}_$currentUserId';
+    });
 
-        // 3. Lắng nghe trạng thái công việc (Job)
-        FirebaseFirestore.instance
-            .collection('jobs')
-            .where('workerId', isEqualTo: currentUserId)
-            .where('clientId', isEqualTo: clientId)
-            .snapshots()
-            .listen((snap) {
-          if (snap.docs.isNotEmpty && mounted) {
-            setState(() => jobData = snap.docs.first.data()..['id'] = snap.docs.first.id);
-          }
-        });
-      }
+    if (clientId.isNotEmpty) {
+      // 1. Lắng nghe thông tin thông tin Khách hàng để hiện lên Header
+      FirebaseFirestore.instance.collection('users').doc(clientId).snapshots().listen((snap) {
+        if (mounted) {
+          setState(() => clientData = snap.data());
+        }
+      });
+
+      // 2. Lắng nghe trạng thái công việc (Job) đang xử lý giữa 2 người
+      FirebaseFirestore.instance
+          .collection('jobs')
+          .where('workerId', isEqualTo: currentUserId)
+          .where('clientId', isEqualTo: clientId)
+          .snapshots()
+          .listen((snap) {
+        if (snap.docs.isNotEmpty && mounted) {
+          setState(() => jobData = snap.docs.first.data()..['id'] = snap.docs.first.id);
+        }
+      });
     }
   }
 
-  // --- CÁC HÀM XỬ LÝ CHỨC NĂNG GIỐNG REACT ---
-
-  // 1. Gửi tin nhắn văn bản
+  // Cập nhật hàm xử lý gửi tin nhắn linh hoạt các loại tham số dữ liệu
   void _sendMessage({String? text, String type = 'text', Map<String, dynamic>? extraData}) async {
     final msg = text ?? _messageController.text.trim();
     if (msg.isEmpty && type == 'text') return;
@@ -78,11 +81,47 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
       ...?extraData,
     };
 
-    await FirebaseFirestore.instance.collection('chats').doc(widget.chatId).collection('messages').add(messageData);
-    await FirebaseFirestore.instance.collection('chats').doc(widget.chatId).update({
+    // Đẩy tin nhắn vào nhóm sub-collection của phòng chat thực tế
+    await FirebaseFirestore.instance.collection('chats/$actualChatId/messages').add(messageData);
+
+    // Cập nhật dòng trạng thái tin nhắn cuối cùng ngoài danh sách chat
+    await FirebaseFirestore.instance.collection('chats').doc(actualChatId).update({
       'lastMessage': type == 'image' ? '📷 Hình ảnh' : msg,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  Future<void> _handlePickAndUploadImage() async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
+
+    if (image == null) return;
+
+    setState(() => _isUploadingImage = true);
+
+    try {
+      final String fileExtension = image.path.split('.').last;
+      final String fileName = "${DateTime.now().millisecondsSinceEpoch}.$fileExtension";
+      final Reference storageRef = FirebaseStorage.instance.ref().child('chats/$actualChatId/$fileName');
+
+      // Thực hiện đẩy tệp tin lên kho lưu trữ đám mây Storage
+      final UploadTask uploadTask = storageRef.putFile(File(image.path));
+      final TaskSnapshot snapshot = await uploadTask;
+      final String downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Đẩy gói tin nhắn chứa liên kết ảnh lên phòng chat Firestore
+      _sendMessage(
+        text: '📷 Hình ảnh',
+        type: 'image',
+        extraData: {'fileUrl': downloadUrl},
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Lỗi tải ảnh phía Thợ: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _isUploadingImage = false);
+    }
   }
 
   // 2. Báo giá (Quote)
@@ -128,7 +167,9 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
   // 3. Hoàn thành công việc
   void _handleCompleteJob() {
     if (jobData?['price'] == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Vui lòng báo giá trước khi hoàn thành.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vui lòng thực hiện báo giá trước khi gửi yêu cầu hoàn thành.')),
+      );
       return;
     }
 
@@ -162,6 +203,10 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (actualChatId.isEmpty) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FB),
       appBar: AppBar(
@@ -178,21 +223,23 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.call, color: Color(0xFF1BA39C)),
-            onPressed: () => launchUrl(Uri.parse('tel:${clientData?['phone']}')),
+            onPressed: () {
+              if (clientData?['phone'] != null) {
+                launchUrl(Uri.parse('tel:${clientData?['phone']}'));
+              }
+            },
           ),
         ],
       ),
       body: Column(
         children: [
-          // TOOLBAR GIỐNG BẢN REACT
+          // TOOLBAR CHỨC NĂNG
           _buildToolBar(),
 
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance
-                  .collection('chats')
-                  .doc(widget.chatId)
-                  .collection('messages')
+                  .collection('chats/$actualChatId/messages')
                   .orderBy('createdAt', descending: true)
                   .snapshots(),
               builder: (context, snapshot) {
@@ -210,6 +257,20 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
             ),
           ),
 
+          // Thanh trạng thái loading ngắn gọn khi thợ đang đẩy hình ảnh lên storage
+          if (_isUploadingImage)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 6.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF1BA39C))),
+                  SizedBox(width: 8),
+                  Text('Đang tải hình ảnh lên...', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
+              ),
+            ),
+
           _buildInputArea(),
         ],
       ),
@@ -217,21 +278,53 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
   }
 
   Widget _buildToolBar() {
+    final String currentStatus = jobData?['status'] ?? '';
+    final dynamic rawPrice = jobData?['price'];
+
+    bool isNegotiable = rawPrice == "Thương lượng" || currentStatus == 'quoted';
+
+    bool showQuoteBtn = false;
+    bool showCompleteBtn = false;
+    bool isCompleteActive = false;
+
+    if (!isNegotiable) {
+      showQuoteBtn = false;
+      showCompleteBtn = true;
+
+      isCompleteActive = currentStatus == 'accepted' || currentStatus == 'confirmed';
+    } else {
+      if (currentStatus == 'confirmed') {
+        showQuoteBtn = false;
+        showCompleteBtn = true;
+        isCompleteActive = true;
+      } else {
+        showQuoteBtn = true;
+        showCompleteBtn = false;
+        isCompleteActive = false;
+      }
+    }
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 15),
       color: Colors.white,
       child: Row(
         children: [
-          _toolBtn('Báo giá', Icons.payments_outlined, _showQuoteModal),
-          const SizedBox(width: 8),
-          _toolBtn(
-              'Hoàn thành',
-              Icons.check_circle_outline,
-              _handleCompleteJob,
-              isActive: jobData?['status'] == 'confirmed',
-              activeColor: const Color(0xFF1BA39C)
-          ),
-          const SizedBox(width: 8),
+          if (showQuoteBtn) ...[
+            _toolBtn('Báo giá', Icons.payments_outlined, _showQuoteModal),
+            const SizedBox(width: 8),
+          ],
+
+          if (showCompleteBtn) ...[
+            _toolBtn(
+                'Hoàn thành',
+                Icons.check_circle_outline,
+                _handleCompleteJob,
+                isActive: isCompleteActive,
+                activeColor: const Color(0xFF1BA39C)
+            ),
+            const SizedBox(width: 8),
+          ],
+
           _toolBtn('Hủy đơn', Icons.cancel_outlined, () {}, color: Colors.red),
         ],
       ),
@@ -292,18 +385,27 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
     if (type == 'image') {
       return ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: Image.network(data['fileUrl'], fit: BoxFit.cover),
+        child: Image.network(
+          data['fileUrl'],
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image, size: 40, color: Colors.grey),
+        ),
       );
     }
 
     if (type == 'location') {
-      return SizedBox(
-        height: 150,
-        width: 200,
-        child: GoogleMap(
-          initialCameraPosition: CameraPosition(target: LatLng(data['latitude'], data['longitude']), zoom: 15),
-          markers: {Marker(markerId: const MarkerId('loc'), position: LatLng(data['latitude'], data['longitude']))},
-          liteModeEnabled: true,
+      double lat = double.tryParse(data['latitude'].toString()) ?? 10.9805;
+      double lng = double.tryParse(data['longitude'].toString()) ?? 106.6745;
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: SizedBox(
+          height: 150,
+          width: 200,
+          child: GoogleMap(
+            initialCameraPosition: CameraPosition(target: LatLng(lat, lng), zoom: 15),
+            markers: {Marker(markerId: const MarkerId('loc'), position: LatLng(lat, lng))},
+            liteModeEnabled: true,
+          ),
         ),
       );
     }
@@ -320,7 +422,10 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
       color: Colors.white,
       child: Row(
         children: [
-          IconButton(icon: const Icon(Icons.image_outlined, color: Color(0xFF1BA39C)), onPressed: () {}),
+          IconButton(
+              icon: const Icon(Icons.image_outlined, color: Color(0xFF1BA39C)),
+              onPressed: _handlePickAndUploadImage
+          ),
           Expanded(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 15),
@@ -335,7 +440,10 @@ class _WorkerChatDetailScreenState extends State<WorkerChatDetailScreen> {
           const SizedBox(width: 5),
           CircleAvatar(
             backgroundColor: const Color(0xFF1BA39C),
-            child: IconButton(icon: const Icon(Icons.send, color: Colors.white, size: 20), onPressed: _sendMessage),
+            child: IconButton(
+                icon: const Icon(Icons.send, color: Colors.white, size: 20),
+                onPressed: () => _sendMessage()
+            ),
           ),
         ],
       ),

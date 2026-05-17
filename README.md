@@ -84,6 +84,25 @@ npm install -g firebase-tools
 
 ---
 
+### 📦 Cài đặt thư viện Backend (Node.js)
+
+```bash
+npm install express cors dotenv axios
+npm install firebase-admin
+npm install crypto-js
+```
+
+---
+
+### ➕ Các thư viện Flutter bổ sung
+
+```bash
+flutter pub add image_picker
+flutter pub add table_calendar
+flutter pub add intl
+flutter pub add firebase_storage
+flutter pub add webview_flutter
+```
 ## ▶️ Chạy project
 
 ```bash
